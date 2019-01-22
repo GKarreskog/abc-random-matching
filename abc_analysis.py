@@ -1,6 +1,6 @@
 #%% Load functions
 import randomMatching
-from randomMatching import LPCHM_model, EWA_model, distance, abc_from_data
+from randomMatching import LPCHM_model, EWA_model, distance, abc_from_data, EWA_osap
 from importlib import reload
 import matplotlib
 # matplotlib.use('Agg')
@@ -27,7 +27,7 @@ from pyabc import (ABCSMC, RV, Distribution,
 import pyabc
 #%%
 reload(randomMatching)
-from randomMatching import LPCHM_model, EWA_model, distance, abc_from_data
+from randomMatching import LPCHM_model, EWA_model, distance, abc_from_data, EWA_osap
 
 #%% Some setup
 mturk_games = dict()
@@ -241,12 +241,16 @@ if (model_probabilities.columns[model_probabilities.get_values()[history.max_t].
 
 
 
+#%% Testing OSAP
+params = test_priors[1].rvs()
+res = EWA_osap(params, [gid], games, default_init, rounds, n_runs, p1_size, p2_size)
 
-
+res[1]["pop_hists"][1]
+[np.mean(res[1]["ind_hists"][1][:,i,:],axis=0) for i in range(len(res[1]["ind_hists"][1][0,:,0]))]
 #%%
 
 df, w = history.get_distribution(m=1)
-
+params = test_priors[1]
 priors[1].decorator_repr()
 
 pyabc.parameters.ParameterStructure

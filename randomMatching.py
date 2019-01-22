@@ -268,7 +268,7 @@ def run_LPCHM(p1_strats, p2_strats, p1_params, p2_params, p1_history, p2_history
         LPCHM_reply_for(p2_strats, p2_payoffs, p1_payoffs, p2_history[i-1], p1_strats_old, p1_order, p2_params, p2_guess)
         calc_history(p1_strats, p1_history[i])
         calc_history(p2_strats, p2_history[i])
-        p1_ind_history[]
+
 
 #######################################################
 ###################  EWA model   ######################
@@ -320,6 +320,8 @@ def run_EWA_osap(p1_strats, p2_strats, p1_params, p2_params, p1_history, p2_hist
     n_ind = len(p2_strats)
     p2_order = np.array(range(n_ind))
     p1_order = np.array(range(n_ind))
+    p1_ind_history[:,0,:] = p1_strats[:]
+    p2_ind_history[:,0,:] = p2_strats[:]
     for i in range(1, rounds):
         gen_matches(p1_order, p2_order)
         p1_strats_old = copy.deepcopy(p1_strats)
