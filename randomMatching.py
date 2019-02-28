@@ -18,13 +18,15 @@ from math import exp
 
 from pyabc import (ABCSMC, RV, Distribution,
                    PercentileDistanceFunction)
+from pyabc.visualization import kde_1d
 
 import pyabc
 
 import os
 import tempfile
+import matplotlib.pyplot as plt
 
-
+from RVkde import RVkde, RVmodel, priors_from_posterior
 
 
 ipython = get_ipython()
@@ -220,7 +222,7 @@ def init_LPCHM_for(strats, self_payoffs, opp_payoffs, params, pure=True, k_rand=
 #######################################################
 
 @jit(nopython=True)
-def LPCHM_reply_for(self_strats, self_payoff_mat, opp_payoff_mat, self_s, opp_s, matches, params, self_guess):
+def LPCHM_reply_for(self_strats, self_payoff_mat, opp_payoff_mat, self_s, opp_s, matches, params, opp_guess):
     n_strats = self_payoff_mat.shape[0]
     opp_n_strats = opp_payoff_mat.shape[0]
     for i in range(len(self_strats)):
@@ -229,7 +231,7 @@ def LPCHM_reply_for(self_strats, self_payoff_mat, opp_payoff_mat, self_s, opp_s,
         λ = params[i][1]
         β = params[i][2]
         match = matches[i]
-        self_guess[i][:] = β*self_guess[i][:] + opp_s[match][:]
+        opp_guess[i][:] = β*opp_guess[i][:] + opp_s[match][:]
         # if p > np.random.rand():
         k = int(np.random.poisson(τ))
         while k > 10:
@@ -240,9 +242,9 @@ def LPCHM_reply_for(self_strats, self_payoff_mat, opp_payoff_mat, self_s, opp_s,
         else:
             self_s_vec = np.ones((k+1, n_strats))/(n_strats)
             opp_strats_vec = np.ones((k+1, opp_n_strats))/(opp_n_strats)
-            self_s_vec[0][:] = self_s[:]
+            self_s_vec[0][:] = self_s[:] ## TODO: fix this so it is realistic
             # opp_strats_vec[0][:] = opp_s[match][:]
-            opp_strats_vec[0][:] = self_guess[i][:]/self_guess[i].sum()
+            opp_strats_vec[0][:] = opp_guess[i][:]/opp_guess[i].sum()
             poisson_weights_all = np.array([poisson_p(i,τ) for i in range(k+1)])
             for j in range(1, k+1):
                 opp_s_guess = poisson_weight(poisson_weights_all, opp_strats_vec, j)
@@ -269,6 +271,78 @@ def run_LPCHM(p1_strats, p2_strats, p1_params, p2_params, p1_history, p2_history
         calc_history(p1_strats, p1_history[i])
         calc_history(p2_strats, p2_history[i])
 
+def run_LPCHM_osap(p1_strats, p2_strats, p1_params, p2_params, p1_history, p2_history, p1_ind_history, p2_ind_history, p1_matches, p2_matches, p1_payoffs, p2_payoffs, p1_guess, p2_guess, rounds, params_vec, init_params, σ_vec=np.array([]), lower_vec=np.array([]), upper_vec=np.array([]), random=True, actual_init=False):
+    init_run(p1_strats, p2_strats, p1_params, p2_params, p1_history, p2_history, p1_payoffs, p2_payoffs, rounds, params_vec, init_params, σ_vec=σ_vec, lower_vec=lower_vec, upper_vec=upper_vec, random=random, actual_init=actual_init)
+    n_ind = len(p2_strats)
+    p2_order = np.array(range(n_ind))
+    p1_order = np.array(range(n_ind))
+    p1_ind_history[:,0,:] = p1_strats[:]
+    p2_ind_history[:,0,:] = p2_strats[:]
+    for i in range(1, rounds):
+        gen_matches(p1_order, p2_order)
+        p1_strats_old = copy.deepcopy(p1_strats)
+        LPCHM_reply_for(p1_strats, p1_payoffs, p2_payoffs, p1_history[i-1], p2_strats, p2_order, p1_params, p1_guess)
+        LPCHM_reply_for(p2_strats, p2_payoffs, p1_payoffs, p2_history[i-1], p1_strats_old, p1_order, p2_params, p2_guess)
+        calc_history(p1_strats, p1_history[i])
+        calc_history(p2_strats, p2_history[i])
+        p1_ind_history[:,i,:] = p1_strats[:]
+        p2_ind_history[:,i,:] = p2_strats[:]
+        p1_matches[i-1,:] = p1_order[:]
+        p2_matches[i-1,:] = p2_order[:]
+
+#######################################################
+###################  LBR model   ####################
+#######################################################
+
+@jit(nopython=True)
+def LBR_reply_for(self_strats, self_payoff_mat, opp_payoff_mat, opp_s, matches, params, opp_guess):
+    n_strats = self_payoff_mat.shape[0]
+    opp_n_strats = opp_payoff_mat.shape[0]
+    for i in range(len(self_strats)):
+        p = params[i][0]
+        λ = params[i][1]
+        β = params[i][2]
+        match = matches[i]
+        opp_guess[i][:] = β*opp_guess[i][:] + opp_s[match][:]
+        if p > np.random.rand():
+            opp_play = opp_guess[i][:]/opp_guess[i].sum()
+            best_reply_logit(self_payoff_mat, opp_play, λ, self_strats[i], pure=True)
+
+
+def run_LBR(p1_strats, p2_strats, p1_params, p2_params, p1_history, p2_history, p1_payoffs, p2_payoffs, p1_guess, p2_guess, rounds, params_vec, init_params, σ_vec=np.array([]), lower_vec=np.array([]), upper_vec=np.array([]), random=True, actual_init=False):
+    init_run(p1_strats, p2_strats, p1_params, p2_params, p1_history, p2_history, p1_payoffs, p2_payoffs, rounds, params_vec, init_params, σ_vec=σ_vec, lower_vec=lower_vec, upper_vec=upper_vec, random=random, actual_init=actual_init)
+    n_ind = len(p2_strats)
+    p2_order = np.array(range(n_ind))
+    p1_order = np.array(range(n_ind))
+    for i in range(1, rounds):
+        gen_matches(p1_order, p2_order)
+        p1_strats_old = copy.deepcopy(p1_strats)
+        LBR_reply_for(p1_strats, p1_payoffs, p2_payoffs, p2_strats, p2_order, p1_params, p1_guess)
+        LBR_reply_for(p2_strats, p2_payoffs, p1_payoffs, p1_strats_old, p1_order, p2_params, p2_guess)
+        calc_history(p1_strats, p1_history[i])
+        calc_history(p2_strats, p2_history[i])
+
+
+def run_LBR_osap(p1_strats, p2_strats, p1_params, p2_params, p1_history, p2_history, p1_ind_history, p2_ind_history, p1_matches, p2_matches, p1_payoffs, p2_payoffs, p1_guess, p2_guess, rounds, params_vec, init_params, σ_vec=np.array([]), lower_vec=np.array([]), upper_vec=np.array([]), random=True, actual_init=False):
+    init_run(p1_strats, p2_strats, p1_params, p2_params, p1_history, p2_history, p1_payoffs, p2_payoffs, rounds, params_vec, init_params, σ_vec=σ_vec, lower_vec=lower_vec, upper_vec=upper_vec, random=random, actual_init=actual_init)
+    n_ind = len(p2_strats)
+    p2_order = np.array(range(n_ind))
+    p1_order = np.array(range(n_ind))
+    p1_ind_history[:,0,:] = p1_strats[:]
+    p2_ind_history[:,0,:] = p2_strats[:]
+    for i in range(1, rounds):
+        gen_matches(p1_order, p2_order)
+        p1_strats_old = copy.deepcopy(p1_strats)
+        LBR_reply_for(p1_strats, p1_payoffs, p2_payoffs, p2_strats, p2_order, p1_params, p1_guess)
+        LBR_reply_for(p2_strats, p2_payoffs, p1_payoffs, p1_strats_old, p1_order, p2_params, p2_guess)
+        calc_history(p1_strats, p1_history[i])
+        calc_history(p2_strats, p2_history[i])
+        p1_ind_history[:,i,:] = p1_strats[:]
+        p2_ind_history[:,i,:] = p2_strats[:]
+        p1_matches[i-1,:] = p1_order[:]
+        p2_matches[i-1,:] = p2_order[:]
+
+
 
 #######################################################
 ###################  EWA model   ######################
@@ -290,12 +364,12 @@ def EWA_reply_for(self_strats, self_payoff_mat, self_As, self_Ns, opp_s, matches
         self_Ns[i] = 1 + self_Ns[i]*ρ
         for s in range(n_strats):
             self_As[i][s] = (φ*old_N*self_As[i][s] + δ*avg_payoffs[s] + (1-δ)*self_strats[i][s]*prev_payoff)/self_Ns[i]
-            if p > np.random.rand():
-                new_strats = np.exp(λ*self_As[i] - (λ*self_As[i]).max())
-                new_strats = new_strats/new_strats.sum()
-                reply = np.zeros(n_strats)
-                reply[weighted_rand_int(new_strats)] = 1.
-                self_strats[i][:] = reply[:]
+        if p > np.random.rand():
+            new_strats = np.exp(λ*self_As[i] - (λ*self_As[i]).max())
+            new_strats = new_strats/new_strats.sum()
+            reply = np.zeros(n_strats)
+            reply[weighted_rand_int(new_strats)] = 1.
+            self_strats[i][:] = reply[:]
 
 
 def run_EWA(p1_strats, p2_strats, p1_params, p2_params, p1_history, p2_history, p1_payoffs, p2_payoffs, p1_As, p2_As, p1_Ns, p2_Ns, rounds, params_vec, init_params, σ_vec=np.array([]), lower_vec=np.array([]), upper_vec=np.array([]), random=True, actual_init=False):
@@ -396,7 +470,6 @@ class Population:
         return {"pop_hists": [self.p1_history, self.p2_history], "ind_hists": [self.p1_ind_history, self.p2_ind_history], "matches": [self.p1_matches, self.p2_matches], "params":[self.p1_params, self.p2_params]}
 
 
-
     def run_LPCHM(self):
         run_LPCHM(self.p1_strats, self.p2_strats, self.p1_params, self.p2_params, self.p1_history, self.p2_history, self.p1_payoffs, self.p2_payoffs, self.p1_guess, self.p2_guess, self.rounds, self.params_vec, self.init_params, actual_init=self.actual_init, σ_vec=self.σ_vec, random=self.random_params, lower_vec=self.lower_vec, upper_vec=self.upper_vec)
         return [self.p1_history, self.p2_history]
@@ -406,6 +479,24 @@ class Population:
         for i in range(n):
             run_LPCHM(self.p1_strats, self.p2_strats, self.p1_params, self.p2_params, h_vec[i][0], h_vec[i][1], self.p1_payoffs, self.p2_payoffs, self.p1_guess, self.p2_guess, self.rounds, self.params_vec, self.init_params, actual_init=self.actual_init, σ_vec=self.σ_vec, random=self.random_params, lower_vec=self.lower_vec, upper_vec=self.upper_vec)
         return h_vec
+
+    def run_LPCHM_osap(self):
+        run_LPCHM_osap(self.p1_strats, self.p2_strats, self.p1_params, self.p2_params, self.p1_history, self.p2_history, self.p1_ind_history, self.p2_ind_history, self.p1_matches, self.p2_matches, self.p1_payoffs, self.p2_payoffs, self.p1_guess, self.p2_guess, self.rounds, self.params_vec, self.init_params, actual_init=self.actual_init, σ_vec=self.σ_vec, random=self.random_params, lower_vec=self.lower_vec, upper_vec=self.upper_vec)
+        return {"pop_hists": [self.p1_history, self.p2_history], "ind_hists": [self.p1_ind_history, self.p2_ind_history], "matches": [self.p1_matches, self.p2_matches], "params":[self.p1_params, self.p2_params]}
+
+    def run_LBR(self):
+        run_LBR(self.p1_strats, self.p2_strats, self.p1_params, self.p2_params, self.p1_history, self.p2_history, self.p1_payoffs, self.p2_payoffs, self.p1_guess, self.p2_guess, self.rounds, self.params_vec, self.init_params, actual_init=self.actual_init, σ_vec=self.σ_vec, random=self.random_params, lower_vec=self.lower_vec, upper_vec=self.upper_vec)
+        return [self.p1_history, self.p2_history]
+
+    def mul_runs_LBR(self, n):
+        h_vec = create_h_vec(self.p1_history, self.p2_history, n)
+        for i in range(n):
+            run_LBR(self.p1_strats, self.p2_strats, self.p1_params, self.p2_params, h_vec[i][0], h_vec[i][1], self.p1_payoffs, self.p2_payoffs, self.p1_guess, self.p2_guess, self.rounds, self.params_vec, self.init_params, actual_init=self.actual_init, σ_vec=self.σ_vec, random=self.random_params, lower_vec=self.lower_vec, upper_vec=self.upper_vec)
+        return h_vec
+
+    def run_LBR_osap(self):
+        run_LBR_osap(self.p1_strats, self.p2_strats, self.p1_params, self.p2_params, self.p1_history, self.p2_history, self.p1_ind_history, self.p2_ind_history, self.p1_matches, self.p2_matches, self.p1_payoffs, self.p2_payoffs, self.p1_guess, self.p2_guess, self.rounds, self.params_vec, self.init_params, actual_init=self.actual_init, σ_vec=self.σ_vec, random=self.random_params, lower_vec=self.lower_vec, upper_vec=self.upper_vec)
+        return {"pop_hists": [self.p1_history, self.p2_history], "ind_hists": [self.p1_ind_history, self.p2_ind_history], "matches": [self.p1_matches, self.p2_matches], "params":[self.p1_params, self.p2_params]}
 
 
 #######################################################
@@ -437,8 +528,8 @@ def gen_kde_from_flat(simulated, bw=0.07):
     return kde
 
 def calc_from_kde(kde, hist):
-    flat_actual = np.array([flatten_single_hist(hist)])
-    res = kde.score(flat_actual)
+    # flat_actual = np.array([flatten_single_hist(hist)])
+    res = kde.score(hist)
     if np.isnan(res):
         res = np.finfo('d').min
     return res
@@ -472,6 +563,13 @@ def flatten_data(hists):
         shape_vec.append(hist.shape)
         hists_vec = np.append(hists_vec, hist.flatten())
     return(hists_vec,shape_vec)
+
+def flat_data_from_osap(res):
+    hists = []
+    for gid in np.sort(list(res.keys())):
+        hists.append(flatten_h(res[gid]["pop_hists"]))
+    flat_hists, shape = flatten_data(hists)
+    return {"data": flat_hists, "shape": shape}
 
 def unflatten_data(hists_vec, shape_vec):
     start = 0
@@ -515,6 +613,57 @@ def plot_h(h, save=False):
     else:
         plt.show()
 
+
+def run_model_return_flat_hist(model, params, gids, games, default_init, rounds, n_per_core, p1_size, p2_size, random_params=False):
+    data = model(params, gids, games, default_init, rounds, n_per_core, p1_size, p2_size, random_params=random_params)
+    # data = model(params, random_params=False)
+    hists = unflatten_data(data["data"], data["shape"])
+    return hists
+
+# def likelihood_from_sim(model, test_res, params, gids, games, default_init, rounds, n_per_core, p1_size, p2_size, random_params=False, cores=mp.cpu_count(), bw=0.05):
+#     pool = mp.Pool(processes=cores)
+#     res_mp = [pool.apply_async(run_model_return_flat_hist, args=(model, params, gids, games, default_init, rounds, n_per_core, p1_size, p2_size, random_params)) for x in range(cores)]
+#     res_unflattened = [p.get() for p in res_mp]
+#     pool.close()
+#     pool.join()
+#     kde_hists = [np.vstack([x[i] for x in res_unflattened]) for i in range(len(gids))]
+#     test_hists = unflatten_data(test_res["flat_hists"], test_res["shape"])
+#     ll = 0
+#     for i in range(len(gids)):
+#         kde_01 = gen_kde_from_flat(kde_hists[i], bw=0.5)
+#         ll += calc_from_kde(kde_01, test_hists[i])
+#     return ll
+#     return kde_hists
+
+def likelihood_from_sim(model, test_res_vec, params, gids, games, default_init, rounds, n_per_core, p1_size, p2_size, random_params=False, bws=[0.07, 0.05, 0.03, 0.01], cores=mp.cpu_count()):
+    pool = mp.Pool(processes=cores)
+    res_mp = [pool.apply_async(run_model_return_flat_hist, args=(model, params, gids, games, default_init, rounds, n_per_core, p1_size, p2_size, random_params)) for x in range(cores)]
+    res_unflattened = [p.get() for p in res_mp]
+    pool.close()
+    pool.join()
+    kde_hists = [np.vstack([x[i] for x in res_unflattened]) for i in range(len(gids))]
+    test_lls_vec = [[0]*len(bws) for i in range(len(test_res_vec))]
+    for k in range(len(bws)):
+        for gid in range(len(gids)):
+            bw = bws[k]
+            kde_01 = gen_kde_from_flat(kde_hists[gid], bw=bw)
+            for i in range(len(test_res_vec)):
+                test_hists = unflatten_data(test_res_vec[i]["flat_hists"], test_res_vec[i]["shape"])
+                test_lls_vec[i][k] += calc_from_kde(kde_01, test_hists[gid])
+        # ll_vec.append(ll)
+    return test_lls_vec
+    # test_hists = unflatten_data(test_res["flat_hists"], test_res["shape"])
+    # ll_vec = []
+    # for bw in bws:
+    #     ll = 0
+    #     for i in range(len(gids)):
+    #         kde_01 = gen_kde_from_flat(kde_hists[i], bw=bw)
+    #         ll += calc_from_kde(kde_01, test_hists[i])
+    #     ll_vec.append(ll)
+    # test_lls_vec.append(ll_vec)
+    # return ll_vec
+
+
 #######################################################
 ################### ABC functions  ####################
 #######################################################
@@ -529,73 +678,336 @@ def distance(x,y):
 
 
 
-def LPCHM_model(parameters, gids, games, default_init, rounds, n_runs, p1_size, p2_size):
-    β = parameters["β"]
-    τ = parameters["τ"]
-    λ = parameters["λ"]
-    β_sd = parameters["β_sd"]
-    τ_sd = parameters["τ_sd"]
-    λ_sd = parameters["λ_sd"]
-    if "init_τ" in parameters:
-        init_params = np.array([parameters["init_τ"], parameters["init_λ"]])
+def LPCHM_model(parameters, gids, games, default_init, rounds, n_runs, p1_size, p2_size, random_params=True):
+    # if (len(parameters) == 3) and (not ("β" in parameters)):
+    if isinstance(parameters, list) or isinstance(parameters, np.ndarray):
+        τ = parameters[0]
+        λ = parameters[1]
+        β = parameters[2]
+        β_sd = 0.01
+        τ_sd = 0.01
+        λ_sd = 0.01
+        init_params=default_init
     else:
-         init_params=default_init
+        τ = parameters["τ"]
+        λ = parameters["λ"]
+        β = parameters["β"]
+        if "β_sd" in parameters.keys():
+            τ_sd = parameters["τ_sd"]
+            λ_sd = parameters["λ_sd"]
+            β_sd = parameters["β_sd"]
+        else:
+            τ_sd = 0.01
+            λ_sd = 0.01
+            β_sd = 0.01
+        if "init_τ" in parameters:
+            init_params = np.array([parameters["init_τ"], parameters["init_λ"]])
+        else:
+             init_params=default_init
     hists = []
     for gid in gids:
-        pop_LPCHM = Population(games[gid][0], games[gid][1], rounds, p1_size,  p2_size,  init_params=init_params, params_vec=[τ, λ, β], σ_vec=[τ_sd, λ_sd, β_sd], lower_vec=[0., 0., 0.], upper_vec=[4., 10., 1.], random_params=True)
+        pop_LPCHM = Population(games[gid][0], games[gid][1], rounds, p1_size,  p2_size,  init_params=init_params, params_vec=[τ, λ, β], σ_vec=[τ_sd, λ_sd, β_sd], lower_vec=[0., 0., 0.], upper_vec=[4., 10., 1.], random_params=random_params)
         hists.append(flatten_h(pop_LPCHM.mul_runs_LPCHM(n_runs)))
     flat_hists, shape = flatten_data(hists)
     return {"data": flat_hists, "shape": shape}
 
-def EWA_model(parameters, gids, games, default_init, rounds, n_runs, p1_size, p2_size):
-    p = parameters["p"]
-    p_sd = parameters["p_sd"]
-    λ = parameters["λ"]
-    λ_sd = parameters["λ_sd"]
-    φ = parameters["φ"]
-    φ_sd = parameters["φ_sd"]
-    ρ = parameters["ρ"]
-    ρ_sd = parameters["ρ_sd"]
-    δ = parameters["δ"]
-    δ_sd = parameters["δ_sd"]
-    if "init_τ" in parameters:
-        init_params = np.array([parameters["init_τ"], parameters["init_λ"]])
+def LPCHM_osap(parameters, gids, games, default_init, rounds, p1_size, p2_size, random_params=True):
+    if isinstance(parameters, list) or isinstance(parameters, np.ndarray):
+        τ = parameters[0]
+        λ = parameters[1]
+        β = parameters[2]
+        β_sd = 0.01
+        τ_sd = 0.01
+        λ_sd = 0.01
+        init_params=default_init
     else:
-         init_params=default_init
+        β = parameters["β"]
+        τ = parameters["τ"]
+        λ = parameters["λ"]
+        if "β_sd" in parameters.keys():
+            β_sd = parameters["β_sd"]
+            τ_sd = parameters["τ_sd"]
+            λ_sd = parameters["λ_sd"]
+        else:
+            β_sd = 0.01
+            τ_sd = 0.01
+            λ_sd = 0.01
+        if "init_τ" in parameters:
+            init_params = np.array([parameters["init_τ"], parameters["init_λ"]])
+        else:
+             init_params=default_init
+    res_dict = dict()
     hists = []
     for gid in gids:
-        pop_EWA = Population(games[gid][0], games[gid][1], rounds, p1_size,  p2_size, init_params=init_params, params_vec=[p, λ, φ, ρ, δ], σ_vec=[p_sd, λ_sd, φ_sd, ρ_sd, δ_sd], lower_vec=[0.,0., 0., 0., 0.], upper_vec=[1.,10., 1., 1., 1.], random_params=True)
+        pop_LPCHM = Population(games[gid][0], games[gid][1], rounds, p1_size,  p2_size,  init_params=init_params, params_vec=[τ, λ, β], σ_vec=[τ_sd, λ_sd, β_sd], lower_vec=[0., 0., 0.], upper_vec=[4., 10., 1.], random_params=random_params)
+        res_dict[gid] = pop_LPCHM.run_LPCHM_osap()
+        hists.append(flatten_h([res_dict[gid]["pop_hists"]]))
+    flat_hists, shape = flatten_data(hists)
+    res_dict["flat_hists"] = flat_hists
+    res_dict["shape"] = shape
+    return res_dict
+
+
+
+def LBR_model(parameters, gids, games, default_init, rounds, n_runs, p1_size, p2_size, random_params=True):
+    if isinstance(parameters, list) or isinstance(parameters, np.ndarray):
+        p = parameters[0]
+        λ = parameters[1]
+        β = parameters[2]
+        β_sd = 0.01
+        p_sd = 0.01
+        λ_sd = 0.01
+        init_params=default_init
+    else:
+        p = parameters["p"]
+        λ = parameters["λ"]
+        β = parameters["β"]
+        if "β_sd" in parameters.keys():
+            p_sd = parameters["p_sd"]
+            λ_sd = parameters["λ_sd"]
+            β_sd = parameters["β_sd"]
+        else:
+            p_sd = 0.01
+            λ_sd = 0.01
+            β_sd = 0.01
+        if "init_τ" in parameters:
+            init_params = np.array([parameters["init_τ"], parameters["init_λ"]])
+        else:
+             init_params=default_init
+    hists = []
+    for gid in gids:
+        pop_LBR = Population(games[gid][0], games[gid][1], rounds, p1_size,  p2_size,  init_params=init_params, params_vec=[p, λ, β], σ_vec=[p_sd, λ_sd, β_sd], lower_vec=[0., 0., 0.], upper_vec=[4., 10., 1.], random_params=random_params)
+        hists.append(flatten_h(pop_LBR.mul_runs_LBR(n_runs)))
+    flat_hists, shape = flatten_data(hists)
+    return {"data": flat_hists, "shape": shape}
+
+def LBR_osap(parameters, gids, games, default_init, rounds, p1_size, p2_size, random_params=True):
+    if isinstance(parameters, list) or isinstance(parameters, np.ndarray):
+        p = parameters[1]
+        λ = parameters[2]
+        β = parameters[0]
+        p_sd = 0.01
+        λ_sd = 0.01
+        β_sd = 0.01
+        init_params=default_init
+    else:
+        p = parameters["p"]
+        λ = parameters["λ"]
+        β = parameters["β"]
+        if "β_sd" in parameters.keys():
+            p_sd = parameters["p_sd"]
+            λ_sd = parameters["λ_sd"]
+            β_sd = parameters["β_sd"]
+        else:
+            p_sd = 0.01
+            λ_sd = 0.01
+            β_sd = 0.01
+        if "init_τ" in parameters:
+            init_params = np.array([parameters["init_τ"], parameters["init_λ"]])
+        else:
+             init_params=default_init
+    res_dict = dict()
+    hists = []
+    for gid in gids:
+        pop_LBR = Population(games[gid][0], games[gid][1], rounds, p1_size,  p2_size,  init_params=init_params, params_vec=[p, λ, β], σ_vec=[p_sd, λ_sd, β_sd], lower_vec=[0., 0., 0.], upper_vec=[4., 10., 1.], random_params=random_params)
+        res_dict[gid] = pop_LBR.run_LBR_osap()
+        hists.append(flatten_h([res_dict[gid]["pop_hists"]]))
+    flat_hists, shape = flatten_data(hists)
+    res_dict["flat_hists"] = flat_hists
+    res_dict["shape"] = shape
+    return res_dict
+
+def EWA_model(parameters, gids, games, default_init, rounds, n_runs, p1_size, p2_size, random_params=True):
+    # if (len(parameters) == 5) and (not ("p" in parameters)):
+    if isinstance(parameters, list) or isinstance(parameters, np.ndarray):
+        p = parameters[0]
+        λ = parameters[1]
+        φ = parameters[2]
+        ρ = parameters[3]
+        δ = parameters[4]
+        p_sd, λ_sd, φ_sd, ρ_sd, δ_sd = 0.01, 0.01, 0.01, 0.01,0.01
+        init_params=default_init
+    else:
+        p = parameters["p"]
+        λ = parameters["λ"]
+        φ = parameters["φ"]
+        ρ = parameters["ρ"]
+        δ = parameters["δ"]
+        if "p_sd" in parameters.keys():
+            p_sd = parameters["p_sd"]
+            λ_sd = parameters["λ_sd"]
+            φ_sd = parameters["φ_sd"]
+            ρ_sd = parameters["ρ_sd"]
+            δ_sd = parameters["δ_sd"]
+        else:
+            p_sd, λ_sd, φ_sd, ρ_sd, δ_sd = 0.01, 0.01, 0.01, 0.01,0.01
+        if "init_τ" in parameters:
+            init_params = np.array([parameters["init_τ"], parameters["init_λ"]])
+        else:
+             init_params=default_init
+    hists = []
+    for gid in gids:
+        pop_EWA = Population(games[gid][0], games[gid][1], rounds, p1_size,  p2_size, init_params=init_params, params_vec=[p, λ, φ, ρ, δ], σ_vec=[p_sd, λ_sd, φ_sd, ρ_sd, δ_sd], lower_vec=[0.,0., 0., 0., 0.], upper_vec=[1.,10., 1., 1., 1.], random_params=random_params)
         hists.append(flatten_h(pop_EWA.mul_runs_EWA(n_runs)))
     flat_hists, shape = flatten_data(hists)
     return {"data": flat_hists, "shape": shape}
 
-def EWA_osap(parameters, gids, games, default_init, rounds, n_runs, p1_size, p2_size):
-    p = parameters["p"]
-    p_sd = parameters["p_sd"]
-    λ = parameters["λ"]
-    λ_sd = parameters["λ_sd"]
-    φ = parameters["φ"]
-    φ_sd = parameters["φ_sd"]
-    ρ = parameters["ρ"]
-    ρ_sd = parameters["ρ_sd"]
-    δ = parameters["δ"]
-    δ_sd = parameters["δ_sd"]
-    if "init_τ" in parameters:
-        init_params = np.array([parameters["init_τ"], parameters["init_λ"]])
+def EWA_osap(parameters, gids, games, default_init, rounds, p1_size, p2_size, random_params=True):
+    # if (len(parameters) == 5) and (not ("p" in parameters)):
+    if isinstance(parameters, list) or isinstance(parameters, np.ndarray):
+        p = parameters[0]
+        λ = parameters[1]
+        φ = parameters[2]
+        ρ = parameters[3]
+        δ = parameters[4]
+        p_sd, λ_sd, φ_sd, ρ_sd, δ_sd = 0.01, 0.01, 0.01, 0.01,0.01
+        init_params=default_init
     else:
-         init_params=default_init
+        p = parameters["p"]
+        λ = parameters["λ"]
+        φ = parameters["φ"]
+        ρ = parameters["ρ"]
+        δ = parameters["δ"]
+        if "p_sd" in parameters.keys():
+            p_sd = parameters["p_sd"]
+            λ_sd = parameters["λ_sd"]
+            φ_sd = parameters["φ_sd"]
+            ρ_sd = parameters["ρ_sd"]
+            δ_sd = parameters["δ_sd"]
+        else:
+            p_sd, λ_sd, φ_sd, ρ_sd, δ_sd = 0.01, 0.01, 0.01, 0.01,0.01
+        if "init_τ" in parameters:
+            init_params = np.array([parameters["init_τ"], parameters["init_λ"]])
+        else:
+             init_params=default_init
     res_dict = dict()
+    hists = []
     for gid in gids:
-        pop_EWA = Population(games[gid][0], games[gid][1], rounds, p1_size,  p2_size, init_params=init_params, params_vec=[p, λ, φ, ρ, δ], σ_vec=[p_sd, λ_sd, φ_sd, ρ_sd, δ_sd], lower_vec=[0.,0., 0., 0., 0.], upper_vec=[1.,10., 1., 1., 1.], random_params=True)
+        pop_EWA = Population(games[gid][0], games[gid][1], rounds, p1_size,  p2_size, init_params=init_params, params_vec=[p, λ, φ, ρ, δ], σ_vec=[p_sd, λ_sd, φ_sd, ρ_sd, δ_sd], lower_vec=[0.,0., 0., 0., 0.], upper_vec=[1.,10., 1., 1., 1.], random_params=random_params)
         res_dict[gid] = pop_EWA.run_EWA_osap()
+        hists.append(flatten_h([res_dict[gid]["pop_hists"]]))
+    flat_hists, shape = flatten_data(hists)
+    res_dict["flat_hists"] = flat_hists
+    res_dict["shape"] = shape
     return res_dict
 
 
-def abc_from_data(y, model_names, models, priors, n_particles, init_ε, α, max_pops, min_accept_rate, add_meta_info):
-    abc = ABCSMC(models, priors, distance, population_size=n_particles, eps=pyabc.epsilon.QuantileEpsilon(initial_epsilon=init_ε, alpha=α))
+def abc_from_data(y, model_names, models, priors, n_particles, init_ε, α, max_pops, min_accept_rate, add_meta_info, model_prior=None):
+    if model_prior == None:
+        model_prior = RV("randint", 0, len(model_names))
+    abc = ABCSMC(models, priors, distance, model_prior=model_prior, population_size=n_particles, eps=pyabc.epsilon.QuantileEpsilon(initial_epsilon=init_ε, alpha=α))
     db_path = ("sqlite:///" + os.path.join(tempfile.gettempdir(), "tmp-pseudos.db"))
     meta_info = {"distribution":"Trunc Normal"}
     meta_info.update(add_meta_info)
     abc.new(db_path, y, meta_info=meta_info)
     history = abc.run(minimum_epsilon=0.1, max_nr_populations=max_pops, min_accept_rate=min_accept_rate)
     return(history)
+
+def abc_from_res_separate(res, gids, model_names, gid_models_org, priors, param_spaces, n_particles, init_ε, α, max_pops, min_accept_rate, add_meta_info):
+    dfs = dict()
+    ws = dict()
+    model_prior = RV("randint", 0, len(model_names))
+    priors = copy.deepcopy(priors)
+    gid_models = copy.deepcopy(gid_models_org)
+    model_names = copy.deepcopy(model_names)
+    param_spaces = copy.deepcopy(param_spaces)
+    for gid in gids:
+        data = np.array([flatten_single_hist(res[gid]["pop_hists"])])
+        flatten_single_hist(res[gid]["pop_hists"])
+        shape = [data.shape]
+        y = {"data": data, "shape":shape}
+        meta_info = {"distribution":"Trunc Normal", "gid":gid}
+        meta_info.update(add_meta_info)
+        abc_hist = abc_from_data(y, model_names, gid_models[gid], priors, n_particles, init_ε, α, max_pops, min_accept_rate, meta_info, model_prior=model_prior)
+        mod_probs = abc_hist.get_model_probabilities()
+        print(mod_probs)
+        print("actual_params: ",np.mean(res[1]["params"][0], axis=0))
+        ml_m = mod_probs.get_values()[abc_hist.max_t].argmax()
+        best_model = model_names[ml_m]
+        print("True:", add_meta_info["model"], " Est:", best_model)
+        est_df, est_w = abc_hist.get_distribution(ml_m)
+        print("Est params: ", ml_from_abc(est_df, est_w))
+        # print("Est params: ", median_from_abc(est_df, est_w))
+        dfs[gid] = []
+        ws[gid] = []
+        alive_models = abc_hist.alive_models(abc_hist.max_t)
+        for m in alive_models:
+            df, w = abc_hist.get_distribution(m)
+            dfs[gid].append(df)
+            ws[gid].append(w)
+
+        model_names = [model_names[m] for m in alive_models]
+        for g in gids:
+            gid_models[g] = [gid_models[g][m] for m in alive_models]
+
+        priors = [priors_from_posterior(dfs[gid][m], ws[gid][m], param_spaces[model_names[m]]) for m in range(len(alive_models))]
+        model_prior = RVmodel(abc_hist)
+        best_model
+    return (dfs, ws, best_model)
+
+
+def abc_from_res(res, gids, model_names, models_wrap, priors, param_spaces, n_particles, init_ε, α, max_pops, min_accept_rate, add_meta_info):
+    dfs = dict()
+    ws = dict()
+    model_prior = RV("randint", 0, len(model_names))
+    priors = copy.deepcopy(priors)
+    # gid_models = copy.deepcopy(gid_models_org)
+    model_names = copy.deepcopy(model_names)
+    param_spaces = copy.deepcopy(param_spaces)
+    # for gid in gids:
+    #     data = np.array([flatten_single_hist(res[gid]["pop_hists"])])
+    #     flatten_single_hist(res[gid]["pop_hists"])
+    #     shape = [data.shape]
+    y = {"data": res["flat_hists"], "shape":res["shape"]}
+    meta_info = {"distribution":"Trunc Normal"}
+    meta_info.update(add_meta_info)
+    abc_hist = abc_from_data(y, model_names, models_wrap, priors, n_particles, init_ε, α, max_pops, min_accept_rate, meta_info, model_prior=model_prior)
+    mod_probs = abc_hist.get_model_probabilities()
+    end_mod_probs = mod_probs.get_values()[abc_hist.max_t]
+    print(mod_probs)
+    print("actual_params: ",np.mean(res[1]["params"][0], axis=0))
+    ml_m = mod_probs.get_values()[abc_hist.max_t].argmax()
+    best_model = model_names[ml_m]
+    print("True:", add_meta_info["model"], " Est:", best_model)
+    est_df, est_w = abc_hist.get_distribution(ml_m)
+    print("Est params: ", ml_from_abc(est_df, est_w))
+    # print("Est params: ", median_from_abc(est_df, est_w))
+    alive_models = abc_hist.alive_models(abc_hist.max_t)
+
+    for m in alive_models:
+        df, w = abc_hist.get_distribution(m)
+        dfs[m] = df
+        ws[m] = w
+
+    return (dfs, ws, best_model, end_mod_probs)
+
+
+def ml_from_abc(df, w):
+    params = {}
+    for key in df.columns:
+        x, pdf = kde_1d(df, w, key)
+        i = np.argmax(pdf)
+        params[key] = x[i]
+    return params
+
+def median_from_abc(df, w):
+    params = {}
+    for key in df.columns:
+        x, pdf = kde_1d(df, w, key, numx=100)
+        cdf = 0
+        i = 0
+        while cdf < 0.5:
+            cdf += (x[i+1] - x[i])*pdf[i]
+            i += 1
+        params[key] = x[i]
+    return params
+
+def mean_from_abc(df, w):
+    params = {}
+    for key in df.columns:
+        x, pdf = kde_1d(df, w, key, numx=100)
+        mean = 0
+        for i in range(len(x)-1):
+            mean += (x[i+1] - x[i])*pdf[i]*(x[i+1] + x[i])/2
+        params[key] = mean
+    return params
