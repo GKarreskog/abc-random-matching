@@ -775,6 +775,7 @@ def LBR_model(parameters, gids, games, default_init, rounds, n_runs, p1_size, p2
         else:
              init_params=default_init
     hists = []
+    res_dict = dict()
     for gid in gids:
         pop_LBR = Population(games[gid][0], games[gid][1], rounds, p1_size,  p2_size,  init_params=init_params, params_vec=[p, λ, β], σ_vec=[p_sd, λ_sd, β_sd], lower_vec=[0., 0., 0.], upper_vec=[4., 10., 1.], random_params=random_params)
         hists.append(flatten_h(pop_LBR.mul_runs_LBR(n_runs)))
@@ -959,6 +960,8 @@ def abc_from_res(res, gids, model_names, models_wrap, priors, param_spaces, n_pa
     #     flatten_single_hist(res[gid]["pop_hists"])
     #     shape = [data.shape]
     y = {"data": res["flat_hists"], "shape":res["shape"]}
+    for gid in gids:
+        y[gid] = res[gid["pop_hists"]]
     meta_info = {"distribution":"Trunc Normal"}
     meta_info.update(add_meta_info)
     abc_hist = abc_from_data(y, model_names, models_wrap, priors, n_particles, init_ε, α, max_pops, min_accept_rate, meta_info, model_prior=model_prior)

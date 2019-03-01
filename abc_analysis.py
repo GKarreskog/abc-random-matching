@@ -61,7 +61,6 @@ default_init = [1., 1.5]
 p1_size = 20
 p2_size = 20
 rounds = 29
-# n_runs = 1
 # bw = 0.05
 # n_particles = 100
 # max_pops = 5
@@ -73,21 +72,21 @@ rounds = 29
 n_per_model = 1
 
 def LPCHM_wrap(params, random_params=True):
-    return LPCHM_model(params, gids, games, default_init, rounds, n_runs, p1_size, p2_size, random_params=random_params)
+    return LPCHM_model(params, gids, games, default_init, rounds, p1_size, p2_size, random_params=random_params)
 
 def LBR_wrap(params, random_params=True):
-    return LBR_model(params, gids, games, default_init, rounds, n_runs, p1_size, p2_size, random_params=random_params)
+    return LBR_model(params, gids, games, default_init, rounds, p1_size, p2_size, random_params=random_params)
 
 def EWA_wrap(params, random_params=True):
-    return EWA_model(params, gids, games, default_init, rounds, n_runs, p1_size, p2_size, random_params=random_params)
+    return EWA_model(params, gids, games, default_init, rounds, p1_size, p2_size, random_params=random_params)
 
-def gid_wrap_model(model, gid, games, default_init, rounds, n_runs, p1_size, p2_size, random_params=True):
+def gid_wrap_model(model, gid, games, default_init, rounds, p1_size, p2_size, random_params=True):
     def call(params):
-        result = model(params, [gid], games, default_init, rounds, n_runs, p1_size, p2_size, random_params=random_params)
+        result = model(params, [gid], games, default_init, rounds, p1_size, p2_size, random_params=random_params)
         return result
     return call
 
-    # return(model(params, [gid], games, default_init, rounds, n_runs, p1_size, p2_size, random_params=random_params))
+    # return(model(params, [gid], games, default_init, rounds, p1_size, p2_size, random_params=random_params))
 
 
 # model_names = ["LBR", "LPCHM", "EWA"]
@@ -101,7 +100,7 @@ models_wrap = [EWA_wrap]
 models = [EWA_model]
 # models_for_gid = [LBR_model, EWA_model]
 
-gid_models = {gid: [gid_wrap_model(model, gid, games, default_init, rounds, n_runs, p1_size, p2_size, random_params=True) for model in models_for_gid] for gid in gids}
+gid_models = {gid: [gid_wrap_model(model, gid, games, default_init, rounds, p1_size, p2_size, random_params=True) for model in models_for_gid] for gid in gids}
 
 # osap_models = [LBR_osap, LPCHM_osap, EWA_osap]
 osap_models = [LBR_osap, EWA_osap]
@@ -162,7 +161,7 @@ models = []
 models_wrap = []
 osap_models = []
 for name, restriction in zip(["EWA_0", "EWA_05", "EWA_1"], [{"p":0.99, "δ":0.}, {"p":0.99, "δ":0.5}, {"p":0.99, "δ":1.}]):
-    wrap_fun, osap_model, perf_f_restricted, param_names_restricted, param_space_restricted, sample_param_space_restricted, bounds_restricted = gen_restricted_ewa({"δ":0.}, EWA_model, EWA_osap, param_names["EWA"], param_spaces["EWA"], sample_param_spaces["EWA"], perf_EWA, gids, games, default_init, rounds, n_runs, p1_size, p2_size, random_params=False)
+    wrap_fun, osap_model, perf_f_restricted, param_names_restricted, param_space_restricted, sample_param_space_restricted, bounds_restricted = gen_restricted_ewa({"δ":0.}, EWA_model, EWA_osap, param_names["EWA"], param_spaces["EWA"], sample_param_spaces["EWA"], perf_EWA, gids, games, default_init, rounds, p1_size, p2_size, random_params=False)
     model_names.append(name)
     models_wrap.append(wrap_fun)
     osap_models.append(osap_model)
@@ -287,11 +286,11 @@ ind_obs_df, var_bias_df = gen_params_perf_dfs(model_names, param_names, params_d
 
 
 #%%
-def gen_restricted_ewa(restrictions, param_names, gids, games, default_init, rounds, n_runs, p1_size, p2_size, random_params=False):
+def gen_restricted_ewa(restrictions, param_names, gids, games, default_init, rounds, p1_size, p2_size, random_params=False):
     def wrap_fun(params):
         for param in restrictions.keys():
             params[param] = restrictions[param]
-        res  = EWA_model(params, gids, games, default_init, rounds, n_runs, p1_size, p2_size, random_params=random_params)
+        res  = EWA_model(params, gids, games, default_init, rounds, p1_size, p2_size, random_params=random_params)
         return res
     return wrap_fun
 
@@ -561,10 +560,10 @@ for gid in gids:
 
 gid = 1
 def LPCHM_wrap(params):
-    return LPCHM_model(params, [gid], games, default_init, rounds, n_runs, p1_size, p2_size)
+    return LPCHM_model(params, [gid], games, default_init, rounds, p1_size, p2_size)
 
 def EWA_wrap(params):
-    return EWA_model(params, [gid], games, default_init, rounds, n_runs, p1_size, p2_size)
+    return EWA_model(params, [gid], games, default_init, rounds, p1_size, p2_size)
 
 model_names = ["LPCHM", "EWA"]
 models = [LPCHM_wrap, EWA_wrap]
@@ -612,7 +611,7 @@ if (model_probabilities.columns[model_probabilities.get_values()[history.max_t].
 
 #%% Testing OSAP
 params = test_priors[1].rvs()
-res = EWA_osap(params, [gid], games, default_init, rounds, n_runs, p1_size, p2_size)
+res = EWA_osap(params, [gid], games, default_init, rounds, p1_size, p2_size)
 
 res[1]["pop_hists"][1]
 [np.mean(res[1]["ind_hists"][1][:,i,:],axis=0) for i in range(len(res[1]["ind_hists"][1][0,:,0]))]
