@@ -231,7 +231,7 @@ def perf_EWA(params, res, games, gids, role, pid):
     return ll
 
 #### Generate restircted funs and spaces
-def gen_restricted_ewa(restrictions, model, osap_model, param_names, param_space, sample_param_space, perf_f, gids, games, default_init, rounds, n_runs, p1_size, p2_size, random_params=True):
+def gen_restricted_ewa(restrictions, osap_model, param_names, param_space, sample_param_space, perf_f, gids, games, default_init, rounds, p1_size, p2_size, random_params=True, summary=avg_and_diff_summary):
     for key,val in restrictions.items():
         restrictions[key] = np.float64(val)
 
@@ -251,8 +251,8 @@ def gen_restricted_ewa(restrictions, model, osap_model, param_names, param_space
                 params[param] = restrictions[param]
                 tot_params = params
 
-        res  = model(tot_params, gids, games, default_init, rounds, n_runs, p1_size, p2_size, random_params=random_params)
-        return res
+        res  = osap_model(tot_params, gids, games, default_init, rounds, p1_size, p2_size, random_params=random_params)
+        return {"summary": summary(res)}
 
     def osap_model_restricted(params_in, gids, games, default_init, rounds, p1_size, p2_size, random_params=random_params):
         params = copy.deepcopy(params_in)
@@ -282,7 +282,7 @@ def gen_restricted_ewa(restrictions, model, osap_model, param_names, param_space
                     tot_params.append(restrictions[p])
                 else:
                     tot_params.append(params[i])
-                i += 1
+                    i += 1
         else:
             for param in restrictions.keys():
                 params[param] = restrictions[param]
@@ -330,8 +330,8 @@ def gen_test_and_compare_models_abc_osap(mod_idx, model_names, models, perf_fs, 
 
     return dict({"model":model_names[i], "params":train_params, "abc_correct":abc_correct, "osap_correct":osap_correct})
 
-def test_both_abc_osap(mod_idx, model_names, perf_fs, osap_models, models_wrap, param_spaces, priors, test_priors, bounds, games, gids, rounds, p1_size, p2_size, options=dict()):
-    opts = {"default_init": [1., 1.5], "init_ε":10., "α":0.5, "max_pops":10, "min_accept_rate":0.1, "n_particles":1000}
+def test_both_abc_osap(mod_idx, model_names, perf_fs, osap_models, models_wrap, param_spaces, priors, test_priors, bounds, games, gids, rounds, p1_size, p2_size, options=dict(), summary=avg_and_divided_summary):
+    opts = {"default_init": [1., 1.5], "init_ε":10., "α":0.5, "max_pops":10, "min_accept_rate":0.001, "n_particles":1000, "min_epsilon":0.01, "stop_single":False}
     for key,val in options.items():
         opts[key] = val
     i = mod_idx
@@ -345,7 +345,7 @@ def test_both_abc_osap(mod_idx, model_names, perf_fs, osap_models, models_wrap, 
     # model_probabilities = abc_hist.get_model_probabilities()
     # mod_probs = model_probabilities.get_values()[abc_hist.max_t]
     # abc_correct = (mod_probs.argmax() == i)
-    dfs, ws, abc_mod_pred, end_mod_probs = abc_from_res(train_res, gids, model_names, models_wrap, priors, param_spaces, opts["n_particles"], opts["init_ε"], opts["α"], opts["max_pops"], opts["min_accept_rate"], {"model":model_names[i]})
+    dfs, ws, abc_mod_pred, end_mod_probs = abc_from_res(train_res, model_names, models_wrap, priors, opts["n_particles"], opts["init_ε"], opts["α"], opts["max_pops"], opts["min_accept_rate"], {"model":model_names[i]}, summary=summary, min_epsilon=opts["min_epsilon"], stop_single=opts["stop_single"])
 
     abc_correct = (abc_mod_pred == model_names[i])
     if i in dfs.keys():
@@ -359,7 +359,7 @@ def test_both_abc_osap(mod_idx, model_names, perf_fs, osap_models, models_wrap, 
     perfs = [x["perf"] for x in osap_pred]
     osap_correct = (np.argmax(perfs) == i)
 
-    return dict({"model":model_names[i], "params":train_params, "abc_correct":abc_correct, "osap_correct":osap_correct, "abc_est":abc_est, "abc_mean_est":abc_mean_est, "osap_est":osap_est, "end_mod_probs":end_mod_probs})
+    return dict({"model":model_names[i], "params":train_params, "abc_correct":abc_correct, "osap_correct":osap_correct, "abc_est":abc_est, "abc_mean_est":abc_mean_est, "osap_est":osap_est, "osap_perfs":perfs, "end_mod_probs":end_mod_probs})
 
 def gen_test_and_compare_params_abc_osap(mod_idx, model_names, models, perf_fs, osap_models, gid_models_org, param_spaces, priors, test_priors, bounds, games, gids, rounds, p1_size, p2_size, default_init, options=dict()):
     opts = {"default_init": [1., 1.5], "init_ε":10., "α":0.5, "max_pops":10, "min_accept_rate":0.1, "n_particles":500}

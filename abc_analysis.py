@@ -72,17 +72,17 @@ rounds = 29
 n_per_model = 1
 
 def LPCHM_wrap(params, random_params=True):
-    return LPCHM_model(params, gids, games, default_init, rounds, p1_size, p2_size, random_params=random_params)
+    return LPCHM_osap(params, gids, games, default_init, rounds, 1, p1_size, p2_size, random_params=random_params)
 
 def LBR_wrap(params, random_params=True):
-    return LBR_model(params, gids, games, default_init, rounds, p1_size, p2_size, random_params=random_params)
+    return LBR_osap(params, gids, games, default_init, rounds, 1, p1_size, p2_size, random_params=random_params)
 
 def EWA_wrap(params, random_params=True):
-    return EWA_model(params, gids, games, default_init, rounds, p1_size, p2_size, random_params=random_params)
+    return EWA_osap(params, gids, games, default_init, rounds, 1, p1_size, p2_size, random_params=random_params)
 
-def gid_wrap_model(model, gid, games, default_init, rounds, p1_size, p2_size, random_params=True):
+def gid_wrap_model(model, gid, games, default_init, rounds, 1, p1_size, p2_size, random_params=True):
     def call(params):
-        result = model(params, [gid], games, default_init, rounds, p1_size, p2_size, random_params=random_params)
+        result = model(params, [gid], games, default_init, rounds, 1, p1_size, p2_size, random_params=random_params)
         return result
     return call
 

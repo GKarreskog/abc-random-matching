@@ -676,6 +676,57 @@ def distance(x,y):
         tot_distance += scp.spatial.distance.euclidean(sim,hist)
     return tot_distance
 
+def whole_hist_summary(res):
+    return res["flat_hists"]
+
+def avg_play_summary(res):
+    sum = []
+    gids = list(filter(lambda k: k not in ["flat_hists", "shape"], res.keys()))
+    for gid in gids:
+        for role in [0,1]:
+         sum.extend(np.mean(res[gid]["pop_hists"][role], axis=0))
+    return np.array(sum)
+
+def end_avg_summary(res):
+    sum = []
+    gids = list(filter(lambda k: k not in ["flat_hists", "shape"], res.keys()))
+    for gid in gids:
+        for role in [0,1]:
+         sum.extend(np.mean(res[gid]["pop_hists"][role], axis=0))
+         sum.extend(res[gid]["pop_hists"][role][-1])
+    return np.array(sum)
+
+def avg_and_diff_summary(res):
+    sum = []
+    gids = list(filter(lambda k: k not in ["flat_hists", "shape"], res.keys()))
+    for gid in gids:
+        for role in [0,1]:
+         sum.extend(np.mean(res[gid]["pop_hists"][role], axis=0))
+         sum.extend(res[gid]["pop_hists"][role][-1])
+         # diff = np.sum([np.abs(res[gid]["pop_hists"][role][i+1] - res[gid]["pop_hists"][role][i]) for i in range(len(res[gid]["pop_hists"][role]) - 1)])
+         diff = np.mean(np.abs(res[gid]["pop_hists"][role][1:] - res[gid]["pop_hists"][role][:-1]))
+         sum.append(diff)
+    return np.array(sum)
+
+def avg_and_divided_summary(res):
+    sum = []
+    gids = list(filter(lambda k: k not in ["flat_hists", "shape"], res.keys()))
+    for gid in gids:
+        for role in [0,1]:
+         sum.extend(np.mean(res[gid]["pop_hists"][role][0:10], axis=0))
+         sum.extend(np.mean(res[gid]["pop_hists"][role][10:20], axis=0))
+         sum.extend(np.mean(res[gid]["pop_hists"][role][20:], axis=0))
+         # sum.extend(res[gid]["pop_hists"][role][-1])
+         # diff = np.sum([np.abs(res[gid]["pop_hists"][role][i+1] - res[gid]["pop_hists"][role][i]) for i in range(len(res[gid]["pop_hists"][role]) - 1)])
+         diff = np.mean(np.abs(res[gid]["pop_hists"][role][1:] - res[gid]["pop_hists"][role][:-1]))
+         sum.append(diff)
+    return np.array(sum)
+
+
+def distance_summary(x,y):
+    tot_diff = np.sum(np.square(x["summary"] - y["summary"]))
+    return tot_diff
+
 
 
 def LPCHM_model(parameters, gids, games, default_init, rounds, n_runs, p1_size, p2_size, random_params=True):
@@ -893,83 +944,34 @@ def EWA_osap(parameters, gids, games, default_init, rounds, p1_size, p2_size, ra
     return res_dict
 
 
-def abc_from_data(y, model_names, models, priors, n_particles, init_ε, α, max_pops, min_accept_rate, add_meta_info, model_prior=None):
+def abc_from_data(y, model_names, models, priors, n_particles, init_ε, α, max_pops, min_accept_rate, add_meta_info, min_epsilon=0.01, model_prior=None, stop_single=False):
     if model_prior == None:
         model_prior = RV("randint", 0, len(model_names))
-    abc = ABCSMC(models, priors, distance, model_prior=model_prior, population_size=n_particles, eps=pyabc.epsilon.QuantileEpsilon(initial_epsilon=init_ε, alpha=α))
+    abc = ABCSMC(models, priors, distance_summary, model_prior=model_prior, population_size=n_particles, eps=pyabc.epsilon.QuantileEpsilon(initial_epsilon=init_ε, alpha=α))
+    abc.stop_if_only_single_model_alive = stop_single
     db_path = ("sqlite:///" + os.path.join(tempfile.gettempdir(), "tmp-pseudos.db"))
     meta_info = {"distribution":"Trunc Normal"}
     meta_info.update(add_meta_info)
     abc.new(db_path, y, meta_info=meta_info)
-    history = abc.run(minimum_epsilon=0.1, max_nr_populations=max_pops, min_accept_rate=min_accept_rate)
+    history = abc.run(minimum_epsilon=min_epsilon, max_nr_populations=max_pops, min_accept_rate=min_accept_rate)
     return(history)
 
-def abc_from_res_separate(res, gids, model_names, gid_models_org, priors, param_spaces, n_particles, init_ε, α, max_pops, min_accept_rate, add_meta_info):
+
+def abc_from_res(res, model_names, models_wrap, priors, n_particles, init_ε, α, max_pops, min_accept_rate, add_meta_info, summary=avg_play_summary, min_epsilon=0.01, stop_single=False):
     dfs = dict()
     ws = dict()
     model_prior = RV("randint", 0, len(model_names))
     priors = copy.deepcopy(priors)
-    gid_models = copy.deepcopy(gid_models_org)
-    model_names = copy.deepcopy(model_names)
-    param_spaces = copy.deepcopy(param_spaces)
-    for gid in gids:
-        data = np.array([flatten_single_hist(res[gid]["pop_hists"])])
-        flatten_single_hist(res[gid]["pop_hists"])
-        shape = [data.shape]
-        y = {"data": data, "shape":shape}
-        meta_info = {"distribution":"Trunc Normal", "gid":gid}
-        meta_info.update(add_meta_info)
-        abc_hist = abc_from_data(y, model_names, gid_models[gid], priors, n_particles, init_ε, α, max_pops, min_accept_rate, meta_info, model_prior=model_prior)
-        mod_probs = abc_hist.get_model_probabilities()
-        print(mod_probs)
-        print("actual_params: ",np.mean(res[1]["params"][0], axis=0))
-        ml_m = mod_probs.get_values()[abc_hist.max_t].argmax()
-        best_model = model_names[ml_m]
-        print("True:", add_meta_info["model"], " Est:", best_model)
-        est_df, est_w = abc_hist.get_distribution(ml_m)
-        print("Est params: ", ml_from_abc(est_df, est_w))
-        # print("Est params: ", median_from_abc(est_df, est_w))
-        dfs[gid] = []
-        ws[gid] = []
-        alive_models = abc_hist.alive_models(abc_hist.max_t)
-        for m in alive_models:
-            df, w = abc_hist.get_distribution(m)
-            dfs[gid].append(df)
-            ws[gid].append(w)
-
-        model_names = [model_names[m] for m in alive_models]
-        for g in gids:
-            gid_models[g] = [gid_models[g][m] for m in alive_models]
-
-        priors = [priors_from_posterior(dfs[gid][m], ws[gid][m], param_spaces[model_names[m]]) for m in range(len(alive_models))]
-        model_prior = RVmodel(abc_hist)
-        best_model
-    return (dfs, ws, best_model)
-
-
-def abc_from_res(res, gids, model_names, models_wrap, priors, param_spaces, n_particles, init_ε, α, max_pops, min_accept_rate, add_meta_info):
-    dfs = dict()
-    ws = dict()
-    model_prior = RV("randint", 0, len(model_names))
-    priors = copy.deepcopy(priors)
-    # gid_models = copy.deepcopy(gid_models_org)
-    model_names = copy.deepcopy(model_names)
-    param_spaces = copy.deepcopy(param_spaces)
-    # for gid in gids:
-    #     data = np.array([flatten_single_hist(res[gid]["pop_hists"])])
-    #     flatten_single_hist(res[gid]["pop_hists"])
-    #     shape = [data.shape]
-    y = {"data": res["flat_hists"], "shape":res["shape"]}
-    for gid in gids:
-        y[gid] = res[gid["pop_hists"]]
+    y = {"summary": summary(res)}
     meta_info = {"distribution":"Trunc Normal"}
     meta_info.update(add_meta_info)
-    abc_hist = abc_from_data(y, model_names, models_wrap, priors, n_particles, init_ε, α, max_pops, min_accept_rate, meta_info, model_prior=model_prior)
+    abc_hist = abc_from_data(y, model_names, models_wrap, priors, n_particles, init_ε, α, max_pops, min_accept_rate, meta_info, model_prior=model_prior, min_epsilon=min_epsilon, stop_single=stop_single)
     mod_probs = abc_hist.get_model_probabilities()
     end_mod_probs = mod_probs.get_values()[abc_hist.max_t]
     print(mod_probs)
     print("actual_params: ",np.mean(res[1]["params"][0], axis=0))
-    ml_m = mod_probs.get_values()[abc_hist.max_t].argmax()
+    # This is since one model might not be alive at all during the estimation.
+    ml_m = mod_probs.columns[mod_probs.get_values()[abc_hist.max_t].argmax()]
     best_model = model_names[ml_m]
     print("True:", add_meta_info["model"], " Est:", best_model)
     est_df, est_w = abc_hist.get_distribution(ml_m)
